@@ -1,0 +1,63 @@
+name: Update and publish library
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 13:25 Moscow. Friday review runs at 13:10; later days retry delivery only.
+    - cron: '25 10 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: library-publication
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      changed: ${{ steps.catalog.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retrieve validated public posts
+        id: catalog
+        run: python scripts/sync_catalog.py
+      - name: Save changed catalogue
+        if: steps.catalog.outputs.changed == 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add catalog.js
+          git commit -m 'Update public channel catalogue'
+          git push
+
+  publish:
+    needs: [sync]
+    if: always() && (github.event_name == 'push' || (needs.sync.result == 'success' && needs.sync.outputs.changed == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Prepare public assets only
+        run: |
+          mkdir _site
+          cp index.html style.css app.js search.js catalog.js icon.svg _site/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - uses: actions/deploy-pages@v4
+        id: deployment
